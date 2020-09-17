@@ -58,6 +58,23 @@
 #include "hid_dev.h"
 #include "config.h"
 
+// added
+#include <esp_err.h>
+#include "MPU6050.h"
+#include <driver/i2c.h>
+#include "MPU6050_6Axis_MotionApps20.h"
+#include "sdkconfig.h"
+#include "mouse_motion_cal.h"
+// added
+
+
+// added
+extern "C" {
+   void app_main();
+}
+
+
+// added
 /**
  * Brief:
  * This example Implemented BLE HID device profile related functions, in which the HID device
@@ -114,6 +131,21 @@ static config_data_t config;
 #define CMDSTATE_IDLE 0
 #define CMDSTATE_GET_RAW 1
 #define CMDSTATE_GET_ASCII 2
+
+// added
+
+#define PIN_SDA 22
+#define PIN_CLK 21
+
+Quaternion q;           // [w, x, y, z]         quaternion container
+VectorFloat gravity;    // [x, y, z]            gravity vector
+float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
+uint16_t packetSize = 42;    // expected DMP packet size (default is 42 bytes)
+uint16_t fifoCount;     // count of all bytes currently in FIFO
+uint8_t fifoBuffer[64]; // FIFO storage buffer
+uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
+float lastypr[3] = {0};
+// added
 
 struct cmdBuf {
     int state;
@@ -576,26 +608,26 @@ void uart_external_task(void *pvParameters)
     }
 }
 
-void blink_task(void *pvParameter)
-{
-    // Initialize GPIO pins
-    gpio_pad_select_gpio(INDICATOR_LED_PIN);
-    gpio_set_direction(INDICATOR_LED_PIN, GPIO_MODE_OUTPUT);
-    int blinkTime;
+// void blink_task(void *pvParameter)
+// {
+//     // Initialize GPIO pins
+//     gpio_pad_select_gpio(INDICATOR_LED_PIN);
+//     gpio_set_direction(INDICATOR_LED_PIN, GPIO_MODE_OUTPUT);
+//     int blinkTime;
 
-    while(1) {
+//     while(1) {
 
-        if (sec_conn) blinkTime=1000;
-        else blinkTime=250;
+//         if (sec_conn) blinkTime=1000;
+//         else blinkTime=250;
 
-        /* Blink off (output low) */
-        gpio_set_level(INDICATOR_LED_PIN, 0);
-        vTaskDelay(blinkTime / portTICK_PERIOD_MS);
-        /* Blink on (output high) */
-        gpio_set_level(INDICATOR_LED_PIN, 1);
-        vTaskDelay(blinkTime / portTICK_PERIOD_MS);
-    }
-}
+//         /* Blink off (output low) */
+//         gpio_set_level(INDICATOR_LED_PIN, 0);
+//         vTaskDelay(blinkTime / portTICK_PERIOD_MS);
+//         /* Blink on (output high) */
+//         gpio_set_level(INDICATOR_LED_PIN, 1);
+//         vTaskDelay(blinkTime / portTICK_PERIOD_MS);
+//     }
+// }
 
 void uart_console_task(void *pvParameters)
 {
@@ -685,6 +717,155 @@ void uart_console_task(void *pvParameters)
     }
 }
 
+// added
+void task_initI2C(void *ignore) {
+	i2c_config_t conf;
+	conf.mode = I2C_MODE_MASTER;
+	conf.sda_io_num = (gpio_num_t)PIN_SDA;
+	conf.scl_io_num = (gpio_num_t)PIN_CLK;
+	conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+	conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+	conf.master.clk_speed = 400000;
+	ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
+	ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
+	vTaskDelete(NULL);
+}
+
+void task_display(void*){
+    uint8_t kbdcmd[] = {28};
+	MPU6050 mpu = MPU6050();
+    int8_t speedh = 0;
+    int8_t speedv = 0;
+    bool end = true;
+	mpu.initialize();
+	mpu.dmpInitialize();
+
+	// This need to be setup individually
+	mpu.setXGyroOffset(220);
+	mpu.setYGyroOffset(76);
+	mpu.setZGyroOffset(-85);
+	mpu.setZAccelOffset(1788);
+
+	mpu.setDMPEnabled(true);
+
+	while(1){
+	    mpuIntStatus = mpu.getIntStatus();
+		// get current FIFO count
+		fifoCount = mpu.getFIFOCount();
+
+	    if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+	        // reset so we can continue cleanly
+	        mpu.resetFIFO();
+
+	    // otherwise, check for DMP data ready interrupt frequently)
+	    } else if (mpuIntStatus & 0x02) {
+	        // wait for correct available data length, should be a VERY short wait
+	        while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
+
+	        // read a packet from FIFO
+
+	        mpu.getFIFOBytes(fifoBuffer, packetSize);
+	 		mpu.dmpGetQuaternion(&q, fifoBuffer);
+			mpu.dmpGetGravity(&gravity, &q);
+			mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+            float x = gravity.x;
+            float y = gravity.y;
+            float z = gravity.z;
+			// printf("YAW: %3.1f, ", ypr[0] * 180/M_PI);
+			// printf("PITCH: %3.1f, ", ypr[1] * 180/M_PI);
+			// printf("ROLL: %3.1f \n", ypr[2] * 180/M_PI);
+            // printf("X: %f ", gravity.x);
+            // printf("Y: %f ", gravity.y);
+            // printf("Z: %f \n", gravity.z);
+            // float yawmove = (ypr[0]-lastypr[0])*180/M_PI;
+            // float pitchmove = (ypr[1]-lastypr[1])*180/M_PI;
+            // float rollmove = (ypr[2]-lastypr[2])*180/M_PI;
+            // printf("Roll Moved: %3.1f ", rollmove);
+            // bool moved = false;
+            
+            // if(yawmove > 0.1) {
+            //     // printf("YAW: %3.1f ",yawmove);
+            //     moved = true;
+            // }
+            // else if(yawmove < -0.1) {
+            //     // printf("YAW: %3.1f ",yawmove);
+            //     moved = true;
+            // }
+
+            // if(pitchmove > 0.1) {
+            //     // printf("PITCH: %3.1f ",pitchmove);
+            //     moved = true;
+            // }
+            // else if(pitchmove < -0.1) {
+            //     // printf("PITCH: %3.1f ",pitchmove);
+            //     moved = true;
+            // }
+
+            // if(rollmove > 0.1) {
+            //     // printf("ROLL: %3.1f ",rollmove);
+            //     moved = true;
+            // }
+            // else if(rollmove < -0.1) {
+            //     // printf("ROLL: %3.1f ",rollmove);
+            //     moved = true;
+            // }
+            // if(moved) {
+            //     end = true;
+            //     // printf("\n");
+            // }
+            // if(!moved && end) {
+            //     end = false;
+            //     // printf("=====ending=====\n");
+            // }
+            
+            // 右
+            // esp_hidd_send_mouse_value(hid_conn_id,0,MOUSE_SPEED,0,0);
+            // 左
+            // esp_hidd_send_mouse_value(hid_conn_id,0,-MOUSE_SPEED,0,0);
+            // 上
+            // esp_hidd_send_mouse_value(hid_conn_id,0,0,-MOUSE_SPEED,0);
+            // 下
+            // esp_hidd_send_mouse_value(hid_conn_id,0,0,MOUSE_SPEED,0);
+
+			// if(moved) {
+                // int8_t speedh = (int)(-gravity.z*40);
+                // int8_t speedv = (int)(gravity.y*40);
+                // printf("speedh: %d speedv: %d\n",speedh,speedv);
+            
+            speedh = horizontal_motion_cal(x,y,z);
+            esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
+                // if(speedh > 1.0 ) {
+                //     // float speedh = (yawmove*yawmove+pitchmove*pitchmove)*5;
+                //     esp_hidd_send_mouse_value(hid_conn_id,0,speedh,0,0);
+                // }
+                // else {
+                //     esp_hidd_send_mouse_value(hid_conn_id,0,-speedh,0,0);
+                // } 
+			// }
+            
+            // else if(rollmove < -1.0) {
+            //     esp_hidd_send_mouse_value(hid_conn_id,0,-MOUSE_SPEED,0,0);
+			// 	// printf("Mouse Moved Left!\n");
+            // }
+            // else {
+            //     // printf("Mouse Not Moved!\n");
+            // }
+
+			// for(int i=0; i<3; i++) {
+			// 	lastypr[i] = ypr[i];
+			// }
+	    }
+
+	    //Best result is to match with DMP refresh rate
+	    // Its last value in components/MPU6050/MPU6050_6Axis_MotionApps20.h file line 310
+	    // Now its 0x13, which means DMP is refreshed with 10Hz rate
+		// vTaskDelay(4/portTICK_PERIOD_MS);
+	}
+
+	vTaskDelete(NULL);
+}
+
+// added
 
 void app_main(void)
 {
@@ -788,10 +969,18 @@ void app_main(void)
     and the init key means which key you can distribute to the slave. */
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
-
+    // added
+    xTaskCreate(&task_initI2C, "mpu_task", 2048, NULL, 5, NULL);
+    // added
     xTaskCreate(&uart_console_task,  "console", 4096, NULL, configMAX_PRIORITIES, NULL);
     xTaskCreate(&uart_external_task, "external", 4096, NULL, configMAX_PRIORITIES, NULL);
     ///@todo maybe reduce stack size for blink task? 4k words for blinky :-)?
-    xTaskCreate(&blink_task, "blink", 4096, NULL, configMAX_PRIORITIES, NULL);
+    // xTaskCreate(&blink_task, "blink", 4096, NULL, configMAX_PRIORITIES, NULL);
+
+    // added
+    // xTaskCreate(&task_initI2C, "mpu_task", 2048, NULL, 5, NULL);
+    vTaskDelay(500/portTICK_PERIOD_MS);
+    xTaskCreate(&task_display, "disp_task", 8192, NULL, 5, NULL);
+    // added
 }
 
