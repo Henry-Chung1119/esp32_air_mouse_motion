@@ -64,7 +64,7 @@
 #include <driver/i2c.h>
 #include "MPU6050_6Axis_MotionApps20.h"
 #include "sdkconfig.h"
-#include "mouse_motion_cal.h"
+#include "mousemotioncal.h"
 // added
 
 
@@ -774,9 +774,9 @@ void task_display(void*){
 			// printf("YAW: %3.1f, ", ypr[0] * 180/M_PI);
 			// printf("PITCH: %3.1f, ", ypr[1] * 180/M_PI);
 			// printf("ROLL: %3.1f \n", ypr[2] * 180/M_PI);
-            // printf("X: %f ", gravity.x);
-            // printf("Y: %f ", gravity.y);
-            // printf("Z: %f \n", gravity.z);
+            printf("X: %f ", gravity.x);
+            printf("Y: %f ", gravity.y);
+            printf("Z: %f \n", gravity.z);
             // float yawmove = (ypr[0]-lastypr[0])*180/M_PI;
             // float pitchmove = (ypr[1]-lastypr[1])*180/M_PI;
             // float rollmove = (ypr[2]-lastypr[2])*180/M_PI;
@@ -833,6 +833,7 @@ void task_display(void*){
                 // printf("speedh: %d speedv: %d\n",speedh,speedv);
             
             speedh = horizontal_motion_cal(x,y,z);
+            speedv = vertical_motion_cal(x,y,z);
             esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
                 // if(speedh > 1.0 ) {
                 //     // float speedh = (yawmove*yawmove+pitchmove*pitchmove)*5;
