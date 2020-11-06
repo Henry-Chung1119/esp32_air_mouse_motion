@@ -779,11 +779,19 @@ void task_display(void*){
     VectorFloat vTrans, vRot; // raw data vel
     VectorFloat vTransPrev, vRotPrev;
     VectorFloat coefVTrans, coefVRot; // coefficients of velocity of translation and rotation
+    VectorFloat transGain, rotGain;
     Quaternion q1, q2, q12; // quaternion tInit->t1, tInit->t2 and t1->t2
-    Quaternion q; // quaternion given by dmp
+    // Quaternion q; // quaternion given by dmp
     float period;
-    
+    vTrans.x = vTrans.y = vTrans.z = 0.0;
+    vRot.x = vRot.y = vRot.z = 0.0;
+    vTransPrev.x = vTransPrev.y = vTransPrev.z = 0.0;
+    vRotPrev.x = vRotPrev.y = vRotPrev.z = 0.0;
+    transGain.x = transGain.y = transGain.z = 1.0;
+    rotGain.x = rotGain.y = rotGain.z = 1.0;
+
     bool end = true;
+    bool first_time = true;
 	mpu.initialize();
 	mpu.dmpInitialize();
 
@@ -812,12 +820,50 @@ void task_display(void*){
 	        // read a packet from FIFO
 
 	        mpu.getFIFOBytes(fifoBuffer, packetSize);
-	 		mpu.dmpGetQuaternion(&q, fifoBuffer);
-			mpu.dmpGetGravity(&gravity, &q);
-			mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-            float x = gravity.x;
-            float y = gravity.y;
-            float z = gravity.z;
+	 		
+            if(first_time) {
+                mpu.dmpGetQuaternion(&q, fifoBuffer);
+                q1.x = q.x;
+                q1.y = q.y;
+                q1.z = q.z;
+                first_time = false;
+                continue;
+            }
+            VectorInt16 temp_rTrans, temp_rRot;
+            VectorFloat v;
+            mpu.dmpGetQuaternion(&q2, fifoBuffer);
+            mpu.dmpGetAccel(&temp_rTrans, fifoBuffer);
+            mpu.dmpGetGyro(&temp_rRot, fifoBuffer);
+            
+            rTrans.x = (float)temp_rTrans.x/(65536*2);
+            rTrans.y = (float)temp_rTrans.y/(65536*2);
+            rTrans.z = (float)temp_rTrans.z/(65536*2);
+
+            rRot.x = (float)rRot.x/(65536*2);
+            rRot.y = (float)rRot.y/(65536*2);
+            rRot.z = (float)rRot.z/(65536*2);
+
+            q12 = q2.getProduct( q1.getConjugate() );
+
+            updateVel(&vTrans, &rTrans, &q12, period, &vTransPrev);
+            updateVel(&vRot, &rRot, &q12, period, &vRotPrev);
+
+            getRotatedX(&xp, &q2);
+            getRotatedY(&yp, &q2);
+            getRotatedZ(&zp, &q2);
+            getComponent(&coefVTrans, &vTrans, &xp, &yp, &zp);
+            getComponent(&coefVRot, &vRot, &xp, &yp, &zp);
+
+            getDisplace(&v, &transGain, &rotGain, &vTrans, &vRot);
+            vTransPrev = vTrans;
+            vRotPrev = vRot;
+			// mpu.dmpGetGravity(&gravity, &q);
+			// mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+            // float x = gravity.x;
+            // float y = gravity.y;
+            // float z = gravity.z;
+            // q1.x = q.x;
+
 			// printf("YAW: %3.1f, ", ypr[0] * 180/M_PI);
 			// printf("PITCH: %3.1f, ", ypr[1] * 180/M_PI);
 			// printf("ROLL: %3.1f \n", ypr[2] * 180/M_PI);
@@ -833,11 +879,12 @@ void task_display(void*){
             // esp_hidd_send_mouse_value(hid_conn_id,0,0,-MOUSE_SPEED,0);
             // 下
             // esp_hidd_send_mouse_value(hid_conn_id,0,0,MOUSE_SPEED,0);
+            // vTrans = 
 
             
-            speedh = horizontal_motion_cal(x,y,z);
-            speedv = vertical_motion_cal(x,y,z);
-            esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
+            // speedh = horizontal_motion_cal(x,y,z);
+            // speedv = vertical_motion_cal(x,y,z);
+            // esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
             
 	    }
 

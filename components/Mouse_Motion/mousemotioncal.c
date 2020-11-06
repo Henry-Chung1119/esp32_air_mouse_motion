@@ -104,8 +104,8 @@ uint8_t getDisplace(VectorFloat *v, VectorFloat *transGain, VectorFloat *rotGain
 {
     // x : the axis to measure horizontal movement
     // z : the axis to measure vertical   movement
-    v->x = transGain->x * transGain->x + rot->z * rotGain->z;
-    v->y = transGain->z * transGain->z + rot->x * rotGain->x;
+    v->x = transGain->x * trans->x + rotGain->z * rot->z;
+    v->y = transGain->z * trans->z + rotGain->x * rot->x;
     return 0;
 }
 
