@@ -25,6 +25,13 @@ extern "C" {
 // int8_t vertical_motion_cal(float x, float y, float z, float lastx, float lasty, float lastz);
 int8_t horizontal_motion_cal(float x, float y, float z);
 int8_t vertical_motion_cal(float x, float y, float z);
+uint8_t getRotatedX(VectorFloat *v, Quaternion *q);
+uint8_t getRotatedY(VectorFloat *v, Quaternion *q);
+uint8_t getRotatedZ(VectorFloat *v, Quaternion *q);
+uint8_t getComponent(VectorFloat *v, VectorFloat *r, VectorFloat *x, VectorFloat *y, VectorFloat *z);
+uint8_t updateVel(VectorFloat *vel, VectorFloat *acc, float t);
+uint8_t getDisplace(VectorFloat *v, VectorFloat *transGain, VectorFloat *rotGain, VectorFloat *trans, VectorFloat *rot);
+uint8_t call();
 #ifdef __cplusplus
 }
 #endif

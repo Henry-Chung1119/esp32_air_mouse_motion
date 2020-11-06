@@ -9,7 +9,7 @@
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-
+#include "helper_3dmath.h"
 // #include "button.h"
 #define TAG "BUTTON"
 
@@ -39,146 +39,108 @@ int8_t vertical_motion_cal(float x, float y, float z) {
     // return (int)(y*40);
 }
 
-// static void update_button(debounce_t *d) {
-//     // gpio_get_level(d->pin) == 0
-//     // d->history = d->history << 1
-//     // gpio_get_level(d->pin) == 1
-//     // d->history = d->history 
-//     d->history = (d->history << 1) | gpio_get_level(d->pin);
-    
-// }
 
-// #define MASK   0b1111000000111111
-// static bool button_rose(debounce_t *d) {
-//     if ((d->history & MASK) == 0b0000000000111111) {
-//         // d->history = 0b0000000000000000
-//         d->history = 0xffff;
-//         return 1;
-//     }
-//     return 0;
-// }
-// // button_fell FALLING EDGE
-// static bool button_fell(debounce_t *d) {
-//     if ((d->history & MASK) == 0b1111000000000000) {
-//         // d->history = 0b1111111111000000
-//         d->history = 0x0000;
-//         return 1;
-//     }
-//     return 0;
-// }
-// static bool button_down(debounce_t *d) {
-//     if (d->inverted) return button_fell(d);
-//     return button_rose(d);
-// }
-// static bool button_up(debounce_t *d) {
-//     if (d->inverted) return button_rose(d);
-//     return button_fell(d);
-// }
+/* v = Qx[1 0 0]' */
+uint8_t getRotatedX(VectorFloat *v, Quaternion *q)
+{
+    v -> x = (q->w * q->w) + (q->x * q->x) - (q->y*q->y) - (q->z*q->z);
+    v -> y = 2 * (q->x * q->y - q->w * q->z);
+    v -> z = 2 * (q->x * q->z + q->w * q->y);
+    return 0;
+}
+/* v = Qx[0 1 0]' */
+uint8_t getRotatedY(VectorFloat *v, Quaternion *q)
+{
+    v -> x = 2 * (q->x * q->y + q->w * q->z);
+    v -> y = (q->w * q->w) - (q->x * q->x) + (q->y*q->y) - (q->z*q->z);
+    v -> z = 2 * (q->y * q->z - q->w * q->x);
+    return 0;
+}
+/* v = Qx[0 0 1]' */
+uint8_t getRotatedZ(VectorFloat *v, Quaternion *q) 
+{
+    v -> x = 2 * (q->x * q->z - q->w * q->y);
+    v -> y = 2 * (q->y * q->z + q->w * q->x);
+    v -> z = (q->w * q->w) - (q->x * q->x) - (q->y*q->y) + (q->z*q->z);
+    return 0;
+}
 
-// #define LONG_PRESS_DURATION (2000)
+/* decompose r into given vectors(x, y, z) */
+/*
+    v: output
+    r: decomposed vector
+    x, y, z : given basis
+*/
+uint8_t getComponent(VectorFloat *v, VectorFloat *r, VectorFloat *x, VectorFloat *y, VectorFloat *z)
+{
+    v->x = r->x * x->x + r->y * x->y + r->z * x->z;
+    v->y = r->x * y->x + r->y * y->y + r->z * y->z;
+    v->z = r->x * z->x + r->y * z->y + r->z * z->z;
+    return 0;
+}
 
-// static uint32_t millis() {
-//     return esp_timer_get_time() / 1000;
-// }
+/* update previous raw vel to current raw vel (rotatition considered) */
+/*
+    vel: output
+    acc: raw acceleration data
+    q  : quaternion from t to t+1 (not the one from dmp, it is from t=0 to t=t+1)
+    t  : period
+    vPrev: previous raw velocity
+*/
+uint8_t updateVel(VectorFloat *vel, VectorFloat *acc, Quaternion *q, float t, VectorFloat *vPrev)
+{
+    VectorFloat ax_x, ax_y, ax_z; // axis_i
+    getRotatedX(&ax_x, q); // ax_x = x'
+    getRotatedY(&ax_y, q); // ax_y = y'
+    getRotatedZ(&ax_z, q); // ax_z = z'
+    vel->x = (vPrev->x * ax_x.x + vPrev->y * ax_y.x + vPrev->z * ax_z.x) + t*acc->x;
+    vel->y = (vPrev->x * ax_x.y + vPrev->y * ax_y.y + vPrev->z * ax_z.y) + t*acc->y;
+    vel->z = (vPrev->x * ax_x.z + vPrev->y * ax_y.z + vPrev->z * ax_z.z) + t*acc->z;
+}
 
-// static void send_event(debounce_t db, int ev) {
-//     button_event_t event = {
-//         .pin = db.pin,
-//         .event = ev,
-//     };
-//     xQueueSend(queue, &event, portMAX_DELAY);
-// }
+/* calculate displacement being transmitted */
+/* @@ */
+uint8_t getDisplace(VectorFloat *v, VectorFloat *transGain, VectorFloat *rotGain, VectorFloat *trans, VectorFloat *rot)
+{
+    // x : the axis to measure horizontal movement
+    // z : the axis to measure vertical   movement
+    v->x = transGain->x * transGain->x + rot->z * rotGain->z;
+    v->y = transGain->z * transGain->z + rot->x * rotGain->x;
+    return 0;
+}
 
+uint8_t call()
+{
+    VectorFloat xp, yp, zp; // x', y', z' from t to t+1
+    VectorFloat rTrans, rRot; // raw data of acc
+    VectorFloat vTrans, vRot; // raw data vel
+    VectorFloat vTransPrev, vRotPrev;
+    VectorFloat coefVTrans, coefVRot; // coefficients of velocity of translation and rotation
+    Quaternion q1, q2, q12; // quaternion tInit->t1, tInit->t2 and t1->t2
+    Quaternion q; // quaternion given by dmp
+    float period;
 
-// // debounce[0].pin = 2;
-// // debounce[1].pin = 4;
-// // debounce[idx].down_time = 0;
-// // debounce[idx].inverted = true;
-// // debounce[idx].history = 0xffff;
+    // init vTrans, vRot, period
+    // init vTransPrev, vRotPrev
+    // init q1 <- q
 
-// static void button_task(void *pvParameter)
-// {
-//     while (1) {
-//         for (int idx=0; idx<pin_count; idx++) {
-//             update_button(&debounce[idx]);
-//             if (debounce[idx].down_time && (millis() - debounce[idx].down_time > LONG_PRESS_DURATION)) {
-//                 debounce[idx].down_time = 0;
-//                 ESP_LOGI(TAG, "%d LONG", debounce[idx].pin);
-//                 int i=0;
-//                 while (!button_up(&debounce[idx])) {
-//                     if (!i) send_event(debounce[idx], BUTTON_DOWN);
-//                     i++;
-//                     if (i>=5) i=0;
-//                     vTaskDelay(10/portTICK_PERIOD_MS);
-//                     update_button(&debounce[idx]);
-//                 }
-//                 ESP_LOGI(TAG, "%d UP", debounce[idx].pin);
-//                 send_event(debounce[idx], BUTTON_UP);
-//             } else if (button_down(&debounce[idx])) {
-//                 debounce[idx].down_time = millis();
-//                 ESP_LOGI(TAG, "%d DOWN", debounce[idx].pin);
-//                 send_event(debounce[idx], BUTTON_DOWN);
-//             } else if (button_up(&debounce[idx])) {
-//                 debounce[idx].down_time = 0;
-//                 ESP_LOGI(TAG, "%d UP", debounce[idx].pin);
-//                 send_event(debounce[idx], BUTTON_UP);
-//             }
-//         }
-//         vTaskDelay(10/portTICK_PERIOD_MS);
-//     }
-// }
+    while(1){
+        // get quaternion, rTrans, rRot
+        // offset subtraction (gravity, static offset ...)
 
-// QueueHandle_t * button_init(unsigned long long pin_select) {
-//     return pulled_button_init(pin_select, GPIO_FLOATING);
-// }
+        // q2 is the current quaternion
+        q12 = q2.getProduct( q1.getConjugate() );
 
+        updateVel(&vTrans, &rTrans, &q12, period, &vTransPrev);
+        updateVel(&vRot, &rRot, &q12, period, &vRotPrev);
 
-// QueueHandle_t * pulled_button_init(unsigned long long pin_select, gpio_pull_mode_t pull_mode)
-// {
-//     if (pin_count != -1) {
-//         ESP_LOGI(TAG, "Already initialized");
-//         return NULL;
-//     }
+        getRotatedX(&xp, &q2);
+        getRotatedY(&yp, &q2);
+        getRotatedZ(&zp, &q2);
+        getComponent(&coefVTrans, &vTrans, &xp, &yp, &zp);
+        getComponent(&coefVRot, &vRot, &xp, &yp, &zp);
 
-//     // Configure the pins
-//     gpio_config_t io_conf;
-//     io_conf.mode = GPIO_MODE_INPUT;
-//     io_conf.pull_up_en = (pull_mode == GPIO_PULLUP_ONLY || pull_mode == GPIO_PULLUP_PULLDOWN);
-//     io_conf.pull_down_en = (pull_mode == GPIO_PULLDOWN_ONLY || pull_mode == GPIO_PULLUP_PULLDOWN);;
-//     io_conf.pin_bit_mask = pin_select;
-//     gpio_config(&io_conf);
-
-//     // Scan the pin map to determine number of pins
-
-//     pin_count = 0;
-//     for (int pin=0; pin<=39; pin++) {
-//         if ((1ULL<<pin) & pin_select) {
-//             pin_count++;
-//         }
-//     }
-//     printf("pin_count=%d\n",pin_count);
-//     // pin_count=2
-//     // Initialize global state and queue
-//     debounce = calloc(pin_count, sizeof(debounce_t));
-//     queue = xQueueCreate(4, sizeof(button_event_t));
-//     // 4 => The maximum number of items the queue can hold at any one time.
-
-//     // Scan the pin map to determine each pin number, populate the state
-//     uint32_t idx = 0;
-//     for (int pin=0; pin<=39; pin++) {
-//         if ((1ULL<<pin) & pin_select) {
-//             // pin = 2,4
-//             ESP_LOGI(TAG, "Registering button input: %d", pin);
-//             debounce[idx].pin = pin;
-//             debounce[idx].down_time = 0;
-//             debounce[idx].inverted = true;
-//             if (debounce[idx].inverted) debounce[idx].history = 0xffff;
-//             idx++;
-//         }
-//     }
-
-//     // Spawn a task to monitor the pins
-//     xTaskCreate(&button_task, "button_task", 4096, NULL, 10, NULL);
-
-//     return queue;
-// }
+        vTransPrev = vTrans;
+        vRotPrev = vRot;
+    }
+}

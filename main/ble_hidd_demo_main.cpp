@@ -64,7 +64,9 @@
 #include <driver/i2c.h>
 #include "MPU6050_6Axis_MotionApps20.h"
 #include "sdkconfig.h"
+#include "freertos/queue.h"
 #include "mousemotioncal.h"
+#include "button.h"
 // added
 
 
@@ -136,6 +138,8 @@ static config_data_t config;
 
 #define PIN_SDA 22
 #define PIN_CLK 21
+#define BUTTON_1 2
+#define BUTTON_2 4
 
 Quaternion q;           // [w, x, y, z]         quaternion container
 VectorFloat gravity;    // [x, y, z]            gravity vector
@@ -145,6 +149,11 @@ uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 float lastypr[3] = {0};
+
+// typedef struct {
+// 	uint8_t pin;
+//     uint8_t event;
+// } button_event_t;
 // added
 
 struct cmdBuf {
@@ -731,11 +740,49 @@ void task_initI2C(void *ignore) {
 	vTaskDelete(NULL);
 }
 
+// void task_initGPIO(void*) {
+
+// }
+
+void button_task(void*){
+    button_event_t ev;
+    QueueHandle_t button_events = button_init(PIN_BIT(BUTTON_1) | PIN_BIT(BUTTON_2));
+    while(true) {
+        if (xQueueReceive(button_events, &ev, 1000/portTICK_PERIOD_MS) == pdPASS) {
+            if ((ev.pin == BUTTON_1) && (ev.event == BUTTON_DOWN)) {
+                // ...
+                esp_hidd_send_mouse_value(hid_conn_id,(1<<0),0,0,0);
+                esp_hidd_send_mouse_value(hid_conn_id,0,0,0,0);
+                printf("Press Button 2\n");
+            }
+            if ((ev.pin == BUTTON_2) && (ev.event == BUTTON_DOWN)) {
+                // ...
+                // printf("%lld\n",(PIN_BIT(BUTTON_1) | PIN_BIT(BUTTON_2)));
+                esp_hidd_send_mouse_value(hid_conn_id,(1<<1),0,0,0);
+                esp_hidd_send_mouse_value(hid_conn_id,0,0,0,0);
+                printf("Press Button 4\n");
+            }
+            printf("%d\n",ev.pin);
+        }
+    }
+    
+}
+
 void task_display(void*){
     uint8_t kbdcmd[] = {28};
 	MPU6050 mpu = MPU6050();
     int8_t speedh = 0;
     int8_t speedv = 0;
+
+    VectorFloat xp, yp, zp; // x', y', z' from t to t+1
+    VectorFloat rTrans, rRot; // raw data of acc
+    VectorFloat vTrans, vRot; // raw data vel
+    VectorFloat vTransPrev, vRotPrev;
+    VectorFloat coefVTrans, coefVRot; // coefficients of velocity of translation and rotation
+    Quaternion q1, q2, q12; // quaternion tInit->t1, tInit->t2 and t1->t2
+    Quaternion q; // quaternion given by dmp
+    float period;
+    
     bool end = true;
 	mpu.initialize();
 	mpu.dmpInitialize();
@@ -759,7 +806,7 @@ void task_display(void*){
 
 	    // otherwise, check for DMP data ready interrupt frequently)
 	    } else if (mpuIntStatus & 0x02) {
-	        // wait for correct available data length, should be a VERY short wait
+            
 	        while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
 	        // read a packet from FIFO
@@ -774,49 +821,9 @@ void task_display(void*){
 			// printf("YAW: %3.1f, ", ypr[0] * 180/M_PI);
 			// printf("PITCH: %3.1f, ", ypr[1] * 180/M_PI);
 			// printf("ROLL: %3.1f \n", ypr[2] * 180/M_PI);
-            printf("X: %f ", gravity.x);
-            printf("Y: %f ", gravity.y);
-            printf("Z: %f \n", gravity.z);
-            // float yawmove = (ypr[0]-lastypr[0])*180/M_PI;
-            // float pitchmove = (ypr[1]-lastypr[1])*180/M_PI;
-            // float rollmove = (ypr[2]-lastypr[2])*180/M_PI;
-            // printf("Roll Moved: %3.1f ", rollmove);
-            // bool moved = false;
-            
-            // if(yawmove > 0.1) {
-            //     // printf("YAW: %3.1f ",yawmove);
-            //     moved = true;
-            // }
-            // else if(yawmove < -0.1) {
-            //     // printf("YAW: %3.1f ",yawmove);
-            //     moved = true;
-            // }
-
-            // if(pitchmove > 0.1) {
-            //     // printf("PITCH: %3.1f ",pitchmove);
-            //     moved = true;
-            // }
-            // else if(pitchmove < -0.1) {
-            //     // printf("PITCH: %3.1f ",pitchmove);
-            //     moved = true;
-            // }
-
-            // if(rollmove > 0.1) {
-            //     // printf("ROLL: %3.1f ",rollmove);
-            //     moved = true;
-            // }
-            // else if(rollmove < -0.1) {
-            //     // printf("ROLL: %3.1f ",rollmove);
-            //     moved = true;
-            // }
-            // if(moved) {
-            //     end = true;
-            //     // printf("\n");
-            // }
-            // if(!moved && end) {
-            //     end = false;
-            //     // printf("=====ending=====\n");
-            // }
+            // printf("X: %f ", gravity.x);
+            // printf("Y: %f ", gravity.y);
+            // printf("Z: %f \n", gravity.z);
             
             // 右
             // esp_hidd_send_mouse_value(hid_conn_id,0,MOUSE_SPEED,0,0);
@@ -827,34 +834,11 @@ void task_display(void*){
             // 下
             // esp_hidd_send_mouse_value(hid_conn_id,0,0,MOUSE_SPEED,0);
 
-			// if(moved) {
-                // int8_t speedh = (int)(-gravity.z*40);
-                // int8_t speedv = (int)(gravity.y*40);
-                // printf("speedh: %d speedv: %d\n",speedh,speedv);
             
             speedh = horizontal_motion_cal(x,y,z);
             speedv = vertical_motion_cal(x,y,z);
             esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
-                // if(speedh > 1.0 ) {
-                //     // float speedh = (yawmove*yawmove+pitchmove*pitchmove)*5;
-                //     esp_hidd_send_mouse_value(hid_conn_id,0,speedh,0,0);
-                // }
-                // else {
-                //     esp_hidd_send_mouse_value(hid_conn_id,0,-speedh,0,0);
-                // } 
-			// }
             
-            // else if(rollmove < -1.0) {
-            //     esp_hidd_send_mouse_value(hid_conn_id,0,-MOUSE_SPEED,0,0);
-			// 	// printf("Mouse Moved Left!\n");
-            // }
-            // else {
-            //     // printf("Mouse Not Moved!\n");
-            // }
-
-			// for(int i=0; i<3; i++) {
-			// 	lastypr[i] = ypr[i];
-			// }
 	    }
 
 	    //Best result is to match with DMP refresh rate
@@ -972,8 +956,9 @@ void app_main(void)
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
     // added
     xTaskCreate(&task_initI2C, "mpu_task", 2048, NULL, 5, NULL);
+    // xTaskCreate(&task_initGPIO, "gpio_init", 2048, NULL, 5, NULL);
     // added
-    xTaskCreate(&uart_console_task,  "console", 4096, NULL, configMAX_PRIORITIES, NULL);
+    // xTaskCreate(&uart_console_task,  "console", 4096, NULL, configMAX_PRIORITIES, NULL);
     xTaskCreate(&uart_external_task, "external", 4096, NULL, configMAX_PRIORITIES, NULL);
     ///@todo maybe reduce stack size for blink task? 4k words for blinky :-)?
     // xTaskCreate(&blink_task, "blink", 4096, NULL, configMAX_PRIORITIES, NULL);
@@ -982,6 +967,7 @@ void app_main(void)
     // xTaskCreate(&task_initI2C, "mpu_task", 2048, NULL, 5, NULL);
     vTaskDelay(500/portTICK_PERIOD_MS);
     xTaskCreate(&task_display, "disp_task", 8192, NULL, 5, NULL);
-    // added
+    xTaskCreate(&button_task, "button_task", 2048, NULL, 5, NULL);
+    
 }
 
