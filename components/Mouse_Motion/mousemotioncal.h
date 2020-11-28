@@ -3,6 +3,7 @@
 #include <stdint.h>
 // #include "freertos/queue.h"
 // #include "driver/gpio.h"
+// #include "helper_3dmath.h"
 
 
 // C++ call C
@@ -10,6 +11,8 @@
 extern "C" {
 #endif
 
+#include "helper_3dmath.h"
+// #include "../MPU6050/helper_3dmath.h"
 // #define PIN_BIT(x) (1ULL<<x)
 // #define BUTTON_DOWN (1)
 // #define BUTTON_UP (2)
@@ -29,9 +32,9 @@ uint8_t getRotatedX(VectorFloat *v, Quaternion *q);
 uint8_t getRotatedY(VectorFloat *v, Quaternion *q);
 uint8_t getRotatedZ(VectorFloat *v, Quaternion *q);
 uint8_t getComponent(VectorFloat *v, VectorFloat *r, VectorFloat *x, VectorFloat *y, VectorFloat *z);
-uint8_t updateVel(VectorFloat *vel, VectorFloat *acc, float t);
+uint8_t updateVel(VectorFloat *vel, VectorFloat *acc, Quaternion *q2, float t);
 uint8_t getDisplace(VectorFloat *v, VectorFloat *transGain, VectorFloat *rotGain, VectorFloat *trans, VectorFloat *rot);
-uint8_t call();
+// uint8_t call();
 #ifdef __cplusplus
 }
 #endif

@@ -31,6 +31,11 @@ THE SOFTWARE.
 
 #ifndef _HELPER_3DMATH_H_
 #define _HELPER_3DMATH_H_
+
+// #ifdef __cplusplus
+// extern "C" {
+// #endif
+
 #include <math.h>
 #include <stdint.h>
 
@@ -214,5 +219,9 @@ class VectorFloat {
             return r;
         }
 };
+
+// #ifdef __cplusplus
+// }
+// #endif
 
 #endif /* _HELPER_3DMATH_H_ */

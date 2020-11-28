@@ -117,7 +117,7 @@ extern "C" {
 
 static uint16_t hid_conn_id = 0;
 static bool sec_conn = false;
-static bool send_volum_up = false;
+// static bool send_volum_up = false;
 #define CHAR_DECLARATION_SIZE   (sizeof(uint8_t))
 
 static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param);
@@ -138,8 +138,15 @@ static config_data_t config;
 
 #define PIN_SDA 22
 #define PIN_CLK 21
-#define BUTTON_1 2
-#define BUTTON_2 4
+#define BUTTON_LEFT 34
+#define BUTTON_RIGHT 17
+
+#define ECHO_TEST_TXD  (GPIO_NUM_4)
+#define ECHO_TEST_RXD  (GPIO_NUM_5)
+#define ECHO_TEST_RTS  (UART_PIN_NO_CHANGE)
+#define ECHO_TEST_CTS  (UART_PIN_NO_CHANGE)
+
+#define BUF_SIZE (1024)
 
 Quaternion q;           // [w, x, y, z]         quaternion container
 VectorFloat gravity;    // [x, y, z]            gravity vector
@@ -150,6 +157,9 @@ uint8_t fifoBuffer[64]; // FIFO storage buffer
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 float lastypr[3] = {0};
 
+float speedh = 0.0;
+float speedv = 0.0;
+uint8_t MOUSE_CLICK = 0x00;
 // typedef struct {
 // 	uint8_t pin;
 //     uint8_t event;
@@ -205,12 +215,12 @@ static esp_ble_adv_data_t hidd_adv_data = {
 
 // config scan response data
 ///@todo Scan response is currently not used. If used, add state handling (adv start) according to ble/gatt_security_server example of Espressif
-static esp_ble_adv_data_t hidd_adv_resp = {
-    .set_scan_rsp = true,
-    .include_name = true,
-    .manufacturer_len = sizeof(manufacturer),
-    .p_manufacturer_data = manufacturer,
-};
+// static esp_ble_adv_data_t hidd_adv_resp = {
+//     .set_scan_rsp = true,
+//     .include_name = true,
+//     .manufacturer_len = sizeof(manufacturer),
+//     .p_manufacturer_data = manufacturer,
+// };
 
 static esp_ble_adv_params_t hidd_adv_params = {
     .adv_int_min        = 0x20,
@@ -746,52 +756,103 @@ void task_initI2C(void *ignore) {
 
 void button_task(void*){
     button_event_t ev;
-    QueueHandle_t button_events = button_init(PIN_BIT(BUTTON_1) | PIN_BIT(BUTTON_2));
+    QueueHandle_t button_events = button_init(PIN_BIT(BUTTON_LEFT) | PIN_BIT(BUTTON_RIGHT));
     while(true) {
+        // MOUSE_CLICK = 0x00;
         if (xQueueReceive(button_events, &ev, 1000/portTICK_PERIOD_MS) == pdPASS) {
-            if ((ev.pin == BUTTON_1) && (ev.event == BUTTON_DOWN)) {
+            if ((ev.pin == BUTTON_LEFT) && (ev.event == BUTTON_DOWN)) {
                 // ...
                 esp_hidd_send_mouse_value(hid_conn_id,(1<<0),0,0,0);
                 esp_hidd_send_mouse_value(hid_conn_id,0,0,0,0);
-                printf("Press Button 2\n");
+                printf("Press Button Left\n");
+                MOUSE_CLICK |= 0x04;
             }
-            if ((ev.pin == BUTTON_2) && (ev.event == BUTTON_DOWN)) {
+            if ((ev.pin == BUTTON_RIGHT) && (ev.event == BUTTON_DOWN)) {
                 // ...
-                // printf("%lld\n",(PIN_BIT(BUTTON_1) | PIN_BIT(BUTTON_2)));
+                // printf("%lld\n",(PIN_BIT(BUTTON_LEFT) | PIN_BIT(BUTTON_RIGHT)));
                 esp_hidd_send_mouse_value(hid_conn_id,(1<<1),0,0,0);
                 esp_hidd_send_mouse_value(hid_conn_id,0,0,0,0);
-                printf("Press Button 4\n");
+                printf("Press Button Right\n");
+                MOUSE_CLICK |= 0x01; 
             }
             printf("%d\n",ev.pin);
+
         }
     }
+    // vTaskDelay(10/portTICK_PERIOD_MS);
     
+}
+
+void echo_task(void*)
+{
+    /* Configure parameters of an UART driver,
+     * communication pins and install the driver */
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity    = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+    uart_param_config(UART_NUM_1, &uart_config);
+    uart_set_pin(UART_NUM_1, ECHO_TEST_TXD, ECHO_TEST_RXD, ECHO_TEST_RTS, ECHO_TEST_CTS);
+    uart_driver_install(UART_NUM_1, BUF_SIZE * 2, 0, 0, NULL, 0);
+
+    // Configure a temporary buffer for the incoming data
+    uint8_t *data = (uint8_t *) malloc(BUF_SIZE);
+    int i;
+    int len;
+    while (1) {
+        // // Write data back to the UART
+        // uint8_t X_MOVE_SIGNED_2S_COMPLEMENT = (signed char)speedh;
+        // uint8_t Y_MOVE_SIGNED_2S_COMPLEMENT = (signed char)speedv;
+        data[0] = 0xFF; // sentinel, should always send 0xFF first
+        data[1] = (signed char)speedh;
+        data[2] = (signed char)speedv;
+        data[3] = MOUSE_CLICK;
+        MOUSE_CLICK = 0x00;
+        // bitwise mask of mouseclick
+        // bit 0 of MOUSECLICK is set if right click (value is 1)
+        // bit 1 of MOUSECLICK is set if mid click (value is 2)
+        // bit 2 of MOUSECLICK is set if left click (value is 4)
+        // for example, if right and left are clicked
+        // data[3] = 0x01 | 0x04;
+
+        // below are for debugging, please keep
+        len = 4;
+        uart_write_bytes(UART_NUM_1, (const char *) data, len);
+        printf("%d %d %d %d sent, get ", (signed char)data[0], (signed char)data[1], (signed char)data[2], (signed char)data[3]);
+                
+        // Read data from the UART
+        len = uart_read_bytes(UART_NUM_1, data, BUF_SIZE, 1 / portTICK_RATE_MS);
+        for(i = 0; i < len && i < BUF_SIZE; i++){
+            printf("%d ", (signed char)data[i]);
+        }
+        printf("-----------\n");
+
+        // delay is for mouse frequency control
+        vTaskDelay(10/portTICK_RATE_MS);
+    }
 }
 
 void task_display(void*){
     uint8_t kbdcmd[] = {28};
 	MPU6050 mpu = MPU6050();
-    int8_t speedh = 0;
-    int8_t speedv = 0;
-
     VectorFloat xp, yp, zp; // x', y', z' from t to t+1
     VectorFloat rTrans, rRot; // raw data of acc
     VectorFloat vTrans, vRot; // raw data vel
-    VectorFloat vTransPrev, vRotPrev;
     VectorFloat coefVTrans, coefVRot; // coefficients of velocity of translation and rotation
     VectorFloat transGain, rotGain;
     Quaternion q1, q2, q12; // quaternion tInit->t1, tInit->t2 and t1->t2
-    // Quaternion q; // quaternion given by dmp
-    float period;
+    int freq = 60;
+    float period = (float)1/freq; // wsa 0.6
     vTrans.x = vTrans.y = vTrans.z = 0.0;
     vRot.x = vRot.y = vRot.z = 0.0;
-    vTransPrev.x = vTransPrev.y = vTransPrev.z = 0.0;
-    vRotPrev.x = vRotPrev.y = vRotPrev.z = 0.0;
-    transGain.x = transGain.y = transGain.z = 1.0;
-    rotGain.x = rotGain.y = rotGain.z = 1.0;
-
+    transGain.x = transGain.y = transGain.z = 5.0;
+    rotGain.x = rotGain.y = rotGain.z = 0.0;
     bool end = true;
     bool first_time = true;
+    int count = 0;
 	mpu.initialize();
 	mpu.dmpInitialize();
 
@@ -799,9 +860,26 @@ void task_display(void*){
 	mpu.setXGyroOffset(220);
 	mpu.setYGyroOffset(76);
 	mpu.setZGyroOffset(-85);
-	mpu.setZAccelOffset(1788);
+	// mpu.setZAccelOffset(1788);
+    // mpu.setXAccelOffset(2032);
+    // mpu.setYAccelOffset(2032);
+    // mpu.setZAccelOffset(3270);
 
 	mpu.setDMPEnabled(true);
+
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity    = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+    uart_param_config(UART_NUM_1, &uart_config);
+    uart_set_pin(UART_NUM_1, ECHO_TEST_TXD, ECHO_TEST_RXD, ECHO_TEST_RTS, ECHO_TEST_CTS);
+    uart_driver_install(UART_NUM_1, BUF_SIZE * 2, 0, 0, NULL, 0);
+    uint8_t *data = (uint8_t *) malloc(BUF_SIZE);
+    int i;
+    int len;
 
 	while(1){
 	    mpuIntStatus = mpu.getIntStatus();
@@ -820,57 +898,69 @@ void task_display(void*){
 	        // read a packet from FIFO
 
 	        mpu.getFIFOBytes(fifoBuffer, packetSize);
-	 		
+	 		// printf("---------------------\n");
             if(first_time) {
                 mpu.dmpGetQuaternion(&q, fifoBuffer);
+                // mpu.dmpGetAccel(&vTransPrev, fifoBuffer);
+                // mpu.dmpGetGyro(&vRotPrev, fifoBuffer);
                 q1.x = q.x;
                 q1.y = q.y;
                 q1.z = q.z;
                 first_time = false;
+                // printf("q=[%f,%f,%f]\n", q.x, q.y, q.z);
                 continue;
             }
+            // printf("---------------------\n");
             VectorInt16 temp_rTrans, temp_rRot;
-            VectorFloat v;
+            VectorFloat v, gravity;
+            // VectorFloat 
             mpu.dmpGetQuaternion(&q2, fifoBuffer);
             mpu.dmpGetAccel(&temp_rTrans, fifoBuffer);
             mpu.dmpGetGyro(&temp_rRot, fifoBuffer);
-            
-            rTrans.x = (float)temp_rTrans.x/(65536*2);
-            rTrans.y = (float)temp_rTrans.y/(65536*2);
-            rTrans.z = (float)temp_rTrans.z/(65536*2);
+            mpu.dmpGetGravity(&gravity, &q2);
 
-            rRot.x = (float)rRot.x/(65536*2);
-            rRot.y = (float)rRot.y/(65536*2);
-            rRot.z = (float)rRot.z/(65536*2);
+#if defined(MODE)             
+            rTrans.x = (float)temp_rTrans.x/(65536/8);
+            rTrans.y = (float)temp_rTrans.y/(65536/8);
+            rTrans.z = (float)temp_rTrans.z/(65536/8);
+			// mpu.dmpGetGravity(&gravity, &q2);
+            rTrans.x -= gravity.x;
+            rTrans.y -= gravity.y;
+            rTrans.z -= gravity.z;
+            if(abs(rTrans.x) < 0.02) rTrans.x = 0.0;
+            if(abs(rTrans.y) < 0.03) rTrans.y = 0.0;
+            if(abs(rTrans.z) < 0.03) rTrans.z = 0.0;
 
-            q12 = q2.getProduct( q1.getConjugate() );
+            rRot.x = (float)rRot.x/(65536/4);
+            rRot.y = (float)rRot.y/(65536/4);
+            rRot.z = (float)rRot.z/(65536/4);
+            // rTrans.x = (float)temp_rTrans.x;
+            // rTrans.y = (float)temp_rTrans.y;
+            // rTrans.z = (float)temp_rTrans.z;
 
-            updateVel(&vTrans, &rTrans, &q12, period, &vTransPrev);
-            updateVel(&vRot, &rRot, &q12, period, &vRotPrev);
-
-            getRotatedX(&xp, &q2);
-            getRotatedY(&yp, &q2);
-            getRotatedZ(&zp, &q2);
-            getComponent(&coefVTrans, &vTrans, &xp, &yp, &zp);
-            getComponent(&coefVRot, &vRot, &xp, &yp, &zp);
-
+            // rRot.x = (float)rRot.x;
+            // rRot.y = (float)rRot.y;
+            // rRot.z = (float)rRot.z;
+            // printf("---------------------\n");
+            // printf("rTrans = [%f,%f,%f]\n", rTrans.x, rTrans.y, rTrans.z);
+            // printf("rRot   = [%f,%f,%f]\n", rRot.x, rRot.y, rRot.z);
+            // q12 = q2.getProduct( q1.getConjugate() );
+            // xp, yp, zp 旋轉過後新的軸
+            // getRotatedX(&xp, &q2);
+            // getRotatedY(&yp, &q2);
+            // getRotatedZ(&zp, &q2);
+            // rTrans.x = rTrans.x-zp.x;
+            // rTrans.y = rTrans.y-zp.y;
+            // rTrans.z = rTrans.z-zp.z;
+            updateVel(&vTrans, &rTrans, &q2, period);
+            // updateVel(&vRot, &rRot, &q2, period);
             getDisplace(&v, &transGain, &rotGain, &vTrans, &vRot);
-            vTransPrev = vTrans;
-            vRotPrev = vRot;
-			// mpu.dmpGetGravity(&gravity, &q);
+            // vTransPrev = vTrans;
+            // vRotPrev = vRot;
 			// mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
             // float x = gravity.x;
             // float y = gravity.y;
             // float z = gravity.z;
-            // q1.x = q.x;
-
-			// printf("YAW: %3.1f, ", ypr[0] * 180/M_PI);
-			// printf("PITCH: %3.1f, ", ypr[1] * 180/M_PI);
-			// printf("ROLL: %3.1f \n", ypr[2] * 180/M_PI);
-            // printf("X: %f ", gravity.x);
-            // printf("Y: %f ", gravity.y);
-            // printf("Z: %f \n", gravity.z);
-            
             // 右
             // esp_hidd_send_mouse_value(hid_conn_id,0,MOUSE_SPEED,0,0);
             // 左
@@ -881,17 +971,65 @@ void task_display(void*){
             // esp_hidd_send_mouse_value(hid_conn_id,0,0,MOUSE_SPEED,0);
             // vTrans = 
 
-            
+            speedh = v.x;
+            speedv = v.y;
+            // printf("Speedh = %f\n", speedh);
+            // printf("Speedv = %f\n", speedv);
             // speedh = horizontal_motion_cal(x,y,z);
             // speedv = vertical_motion_cal(x,y,z);
-            // esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
+            // if(count == 5) {
+
+            // printf("---------------------\n");
+            // printf("X: %f ", gravity.x);
+            // printf("Y: %f ", gravity.y);
+            // printf("Z: %f \n", gravity.z);
+            // printf("Quaternion = [%f,%f,%f,%f]\n", q2.w, q2.x, q2.y, q2.z);
+            // printf("rTrans = [%f,%f,%f]\n", rTrans.x, rTrans.y, rTrans.z);
+            // printf("rRot   = [%f,%f,%f]\n", rRot.x, rRot.y, rRot.z);
+            printf("%f,%f,%f\n", vTrans.x, vTrans.y, vTrans.z);
+            // printf("vRot   = [%f,%f,%f]\n", vRot.x, vRot.y, vRot.z);
+            // printf("coefVTrans = [%f,%f,%f]\n", coefVTrans.x, coefVTrans.y, coefVTrans.z);
+            // printf("coefVRot   = [%f,%f,%f]\n", coefVRot.x, coefVRot.y, coefVRot.z);
+            // printf("Speedh = %f\n", speedh);
+            // printf("Speedv = %f\n", speedv);
+            // printf("---------------------\n");
+            // count = 0;
+            // }else{
+            //     count ++;
+            // }
+#else 
+            float x = gravity.x;
+            float y = gravity.y;
+            float z = gravity.z;
+            // printf("[%f, %f, %f]\n", x, y, z);
+            speedh = horizontal_motion_cal(x,y,z);
+            speedv = vertical_motion_cal(x,y,z);    
+            data[0] = 0xFF; // sentinel, should always send 0xFF first
+            data[1] = (signed char)speedh;
+            data[2] = (signed char)speedv;
+            data[3] = MOUSE_CLICK;
+            MOUSE_CLICK = 0x00;
+            len = 4;
+            uart_write_bytes(UART_NUM_1, (const char *) data, len);
+            // printf("%d %d %d %d sent, get ", (signed char)data[0], (signed char)data[1], (signed char)data[2], (signed char)data[3]);
+                
+            // Read data from the UART
+            len = uart_read_bytes(UART_NUM_1, data, BUF_SIZE, 1 / portTICK_RATE_MS);
+            for(i = 0; i < len && i < BUF_SIZE; i++){
+                printf("%c ", (char)data[i]);
+            }
+            if(len > 0){
+                printf("-----------\n");
+            }
+#endif
+            esp_hidd_send_mouse_value(hid_conn_id,0,speedh,speedv,0);
             
 	    }
 
-	    //Best result is to match with DMP refresh rate
+	    // Best result is to match with DMP refresh rate
 	    // Its last value in components/MPU6050/MPU6050_6Axis_MotionApps20.h file line 310
 	    // Now its 0x13, which means DMP is refreshed with 10Hz rate
-		// vTaskDelay(4/portTICK_PERIOD_MS);
+		// vTaskDelay((1000/freq)/portTICK_PERIOD_MS);
 	}
 
 	vTaskDelete(NULL);
@@ -1015,6 +1153,7 @@ void app_main(void)
     vTaskDelay(500/portTICK_PERIOD_MS);
     xTaskCreate(&task_display, "disp_task", 8192, NULL, 5, NULL);
     xTaskCreate(&button_task, "button_task", 2048, NULL, 5, NULL);
+    // xTaskCreate(&echo_task, "uart_echo_task", 2048, NULL, 10, NULL);
     
 }
 

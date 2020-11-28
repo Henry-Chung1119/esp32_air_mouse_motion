@@ -9,7 +9,7 @@
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "helper_3dmath.h"
+// #include "helper_3dmath.h"
 // #include "button.h"
 #define TAG "BUTTON"
 
@@ -26,7 +26,7 @@
 int8_t horizontal_motion_cal(float x, float y, float z) {
     int speedh = 0;
     // if(abs(z-lastz) > 1.0) {
-        speedh = (int)(-z*40);
+        speedh = (int)(x*40);
     // }
     return speedh;
 }
@@ -87,15 +87,31 @@ uint8_t getComponent(VectorFloat *v, VectorFloat *r, VectorFloat *x, VectorFloat
     t  : period
     vPrev: previous raw velocity
 */
-uint8_t updateVel(VectorFloat *vel, VectorFloat *acc, Quaternion *q, float t, VectorFloat *vPrev)
+uint8_t updateVel(VectorFloat *vel, VectorFloat *acc, Quaternion *q2, float t)
 {
-    VectorFloat ax_x, ax_y, ax_z; // axis_i
-    getRotatedX(&ax_x, q); // ax_x = x'
-    getRotatedY(&ax_y, q); // ax_y = y'
-    getRotatedZ(&ax_z, q); // ax_z = z'
-    vel->x = (vPrev->x * ax_x.x + vPrev->y * ax_y.x + vPrev->z * ax_z.x) + t*acc->x;
-    vel->y = (vPrev->x * ax_x.y + vPrev->y * ax_y.y + vPrev->z * ax_z.y) + t*acc->y;
-    vel->z = (vPrev->x * ax_x.z + vPrev->y * ax_y.z + vPrev->z * ax_z.z) + t*acc->z;
+    // V(t+1) = V(t)+Q^(-1)*acc*t
+    // Q = [ 
+    //       (w*w + x*x - y*y - z*z)  (2*x*y + 2*w*z)          (2*x*z - 2*w*y)
+    //       (2*x*y - 2*w*z)          (w*w - x*x + y*y - z*z)  (2*y*z + 2*w*x)
+    //       (2*x*z + 2*w*y)          (2*y*z - 2*w*x)          (w*w - x*x - y*y + z*z) 
+    //     ]
+    // p = [x y z]'
+
+    Quaternion temp_q; // axis_i
+    temp_q = q2->getConjugate();
+    float w = temp_q.w;
+    float x = temp_q.x;
+    float y = temp_q.y;
+    float z = temp_q.z;
+    vel->x += (w*w + x*x - y*y - z*z)*(t*acc->x) + (2*x*y + 2*w*z)*(t*acc->y) + (2*x*z - 2*w*y)*(t*acc->z);
+    vel->y += (2*x*y - 2*w*z)*(t*acc->x) + (w*w - x*x + y*y - z*z)*(t*acc->y) + (2*y*z + 2*w*x)*(t*acc->z);
+    vel->z += (2*x*z + 2*w*y)*(t*acc->x) + (2*y*z - 2*w*x)*(t*acc->y) + (w*w - x*x - y*y + z*z)*(t*acc->z);
+    // vel->x = ()
+    // vel->x = (vPrev->x * q12->x + vPrev->y * q12->x + vPrev->z * q12->x) + t*acc->x;
+    // vel->y = (vPrev->x * q12->y + vPrev->y * q12->y + vPrev->z * q12->y) + t*acc->y;
+    // vel->z = (vPrev->x * q12->z + vPrev->y * q12->z + vPrev->z * q12->z) + t*acc->z;
+    // printf("vel = [%f, %f, %f]\n", vel->x, vel->y, vel->z);
+    return 0;
 }
 
 /* calculate displacement being transmitted */
@@ -105,42 +121,44 @@ uint8_t getDisplace(VectorFloat *v, VectorFloat *transGain, VectorFloat *rotGain
     // x : the axis to measure horizontal movement
     // z : the axis to measure vertical   movement
     v->x = transGain->x * trans->x + rotGain->z * rot->z;
+    v->x = (v->x)>0 ? (v->x) : -(v->x);
     v->y = transGain->z * trans->z + rotGain->x * rot->x;
+    v->y = (v->y)>0 ? (v->y) : -(v->y);
     return 0;
 }
 
-uint8_t call()
-{
-    VectorFloat xp, yp, zp; // x', y', z' from t to t+1
-    VectorFloat rTrans, rRot; // raw data of acc
-    VectorFloat vTrans, vRot; // raw data vel
-    VectorFloat vTransPrev, vRotPrev;
-    VectorFloat coefVTrans, coefVRot; // coefficients of velocity of translation and rotation
-    Quaternion q1, q2, q12; // quaternion tInit->t1, tInit->t2 and t1->t2
-    Quaternion q; // quaternion given by dmp
-    float period;
+// uint8_t call()
+// {
+//     VectorFloat xp, yp, zp; // x', y', z' from t to t+1
+//     VectorFloat rTrans, rRot; // raw data of acc
+//     VectorFloat vTrans, vRot; // raw data vel
+//     VectorFloat vTransPrev, vRotPrev;
+//     VectorFloat coefVTrans, coefVRot; // coefficients of velocity of translation and rotation
+//     Quaternion q1, q2, q12; // quaternion tInit->t1, tInit->t2 and t1->t2
+//     Quaternion q; // quaternion given by dmp
+//     float period;
 
-    // init vTrans, vRot, period
-    // init vTransPrev, vRotPrev
-    // init q1 <- q
+//     // init vTrans, vRot, period
+//     // init vTransPrev, vRotPrev
+//     // init q1 <- q
 
-    while(1){
-        // get quaternion, rTrans, rRot
-        // offset subtraction (gravity, static offset ...)
+//     while(1){
+//         // get quaternion, rTrans, rRot
+//         // offset subtraction (gravity, static offset ...)
 
-        // q2 is the current quaternion
-        q12 = q2.getProduct( q1.getConjugate() );
+//         // q2 is the current quaternion
+//         q12 = q2.getProduct( q1.getConjugate() );
 
-        updateVel(&vTrans, &rTrans, &q12, period, &vTransPrev);
-        updateVel(&vRot, &rRot, &q12, period, &vRotPrev);
+//         updateVel(&vTrans, &rTrans, &q12, period, &vTransPrev);
+//         updateVel(&vRot, &rRot, &q12, period, &vRotPrev);
 
-        getRotatedX(&xp, &q2);
-        getRotatedY(&yp, &q2);
-        getRotatedZ(&zp, &q2);
-        getComponent(&coefVTrans, &vTrans, &xp, &yp, &zp);
-        getComponent(&coefVRot, &vRot, &xp, &yp, &zp);
+//         getRotatedX(&xp, &q2);
+//         getRotatedY(&yp, &q2);
+//         getRotatedZ(&zp, &q2);
+//         getComponent(&coefVTrans, &vTrans, &xp, &yp, &zp);
+//         getComponent(&coefVRot, &vRot, &xp, &yp, &zp);
 
-        vTransPrev = vTrans;
-        vRotPrev = vRot;
-    }
-}
+//         vTransPrev = vTrans;
+//         vRotPrev = vRot;
+//     }
+// }
